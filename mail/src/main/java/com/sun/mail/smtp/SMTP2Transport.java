@@ -71,7 +71,7 @@ import javax.net.ssl.SSLSocket;
  * @see javax.mail.event.TransportEvent
  */
 
-public class SMTPTransport extends Transport {
+public class SMTP2Transport extends Transport {
 
     private String name = "smtp";	// Name of this protocol
     private int defaultPort = 25;	// default SMTP port
@@ -113,6 +113,8 @@ public class SMTPTransport extends Transport {
     private boolean requireStartTLS;	// require STARTTLS command
     private boolean useRset;		// use RSET instead of NOOP
     private boolean noopStrict = true;	// NOOP must return 250 for success
+    private boolean useXACK;            // use XACK extension
+    private boolean _disableXACK = false;
 
     private MailLogger logger;		// debug logger
     private MailLogger traceLogger;	// protocol trace logger
@@ -134,7 +136,7 @@ public class SMTPTransport extends Transport {
     private static final byte[] CRLF = { (byte)'\r', (byte)'\n' };
     private static final String UNKNOWN = "UNKNOWN";	// place holder
     private static final String[] UNKNOWN_SA = new String[0]; // place holder
-    private static final Logger LOG = Logger.getLogger(SMTPTransport.class.getName());
+    private static final Logger LOG = Logger.getLogger(SMTP2Transport.class.getName());
     
     /**
      * Constructor that takes a Session object and a URLName
@@ -143,7 +145,7 @@ public class SMTPTransport extends Transport {
      * @param	session	the Session
      * @param	urlname	the URLName of this transport
      */
-    public SMTPTransport(Session session, URLName urlname) {
+    public SMTP2Transport(Session session, URLName urlname) {
 	this(session, urlname, "smtp", false);
     }
 
@@ -155,7 +157,7 @@ public class SMTPTransport extends Transport {
      * @param	name	the protocol name of this transport
      * @param	isSSL	use SSL to connect?
      */
-    protected SMTPTransport(Session session, URLName urlname,
+    protected SMTP2Transport(Session session, URLName urlname,
 				String name, boolean isSSL) {
 	super(session, urlname);
 	Properties props = session.getProperties();
@@ -199,6 +201,10 @@ public class SMTPTransport extends Transport {
 	useStartTLS = PropUtil.getBooleanProperty(props,
 				"mail." + name + ".starttls.enable", false);
 
+	// mail.smtp.starttls.enable enables use of STARTTLS command
+	useXACK = PropUtil.getBooleanProperty(props,
+				"mail." + name + ".xack.disable", false);        
+        
 	// mail.smtp.starttls.required requires use of STARTTLS command
 	requireStartTLS = PropUtil.getBooleanProperty(props,
 				"mail." + name + ".starttls.required", false);
@@ -746,7 +752,13 @@ public class SMTPTransport extends Transport {
 			"host does not support STARTTLS");
 		}
 	    }
-
+            
+            _disableXACK = false;
+            if (useXACK && supportsExtension("XACK")) {
+                // enviar "XACK OFF" y verificar " 250 2.0.0 ok"
+                xackOff();
+                _disableXACK = true;
+            } 
 	    if (allowutf8 && !supportsExtension("SMTPUTF8"))
 		logger.log(Level.INFO, "mail.mime.allowutf8 set " +
 			    "but server doesn't advertise SMTPUTF8 support");
@@ -1145,7 +1157,7 @@ public class SMTPTransport extends Transport {
 		Class<?> sac = Class.forName(
 		    "com.sun.mail.smtp.SMTPSaslAuthenticator");
 		Constructor<?> c = sac.getConstructor(new Class<?>[] {
-					SMTPTransport.class,
+					SMTP2Transport.class,
 					String.class,
 					Properties.class,
 					MailLogger.class,
@@ -1889,86 +1901,88 @@ public class SMTPTransport extends Transport {
 	    // send the addresses to the SMTP server
 	    sendCommand(cmd);
 	    // check the server's response for address validity
-	    retCode = readServerResponse();
-	    switch (retCode) {
-	    case 250: case 251:
-		valid.add(ia);
-		if (!reportSuccess)
-		    break;
+            if (!_disableXACK) {
+                retCode = readServerResponse();
+                switch (retCode) {
+                case 250: case 251:
+                    valid.add(ia);
+                    if (!reportSuccess)
+                        break;
 
-		// user wants exception even when successful, including
-		// details of the return code
+                    // user wants exception even when successful, including
+                    // details of the return code
 
-		// create and chain the exception
-		sfex = new SMTPAddressSucceededException(ia, cmd, retCode,
-							lastServerResponse);
-		if (mex == null)
-		    mex = sfex;
-		else
-		    mex.setNextException(sfex);
-		break;
+                    // create and chain the exception
+                    sfex = new SMTPAddressSucceededException(ia, cmd, retCode,
+                                                            lastServerResponse);
+                    if (mex == null)
+                        mex = sfex;
+                    else
+                        mex.setNextException(sfex);
+                    break;
 
-	    case 550: case 553: case 503: case 551: case 501:
-		// given address is invalid
-		if (!sendPartial)
-		    sendFailed = true;
-		invalid.add(ia);
-		// create and chain the exception
-		sfex = new SMTPAddressFailedException(ia, cmd, retCode,
-							lastServerResponse);
-		if (mex == null)
-		    mex = sfex;
-		else
-		    mex.setNextException(sfex);
-		break;
+                case 550: case 553: case 503: case 551: case 501:
+                    // given address is invalid
+                    if (!sendPartial)
+                        sendFailed = true;
+                    invalid.add(ia);
+                    // create and chain the exception
+                    sfex = new SMTPAddressFailedException(ia, cmd, retCode,
+                                                            lastServerResponse);
+                    if (mex == null)
+                        mex = sfex;
+                    else
+                        mex.setNextException(sfex);
+                    break;
 
-	    case 552: case 450: case 451: case 452:
-		// given address is valid
-		if (!sendPartial)
-		    sendFailed = true;
-		validUnsent.add(ia);
-		// create and chain the exception
-		sfex = new SMTPAddressFailedException(ia, cmd, retCode,
-							lastServerResponse);
-		if (mex == null)
-		    mex = sfex;
-		else
-		    mex.setNextException(sfex);
-		break;
+                case 552: case 450: case 451: case 452:
+                    // given address is valid
+                    if (!sendPartial)
+                        sendFailed = true;
+                    validUnsent.add(ia);
+                    // create and chain the exception
+                    sfex = new SMTPAddressFailedException(ia, cmd, retCode,
+                                                            lastServerResponse);
+                    if (mex == null)
+                        mex = sfex;
+                    else
+                        mex.setNextException(sfex);
+                    break;
 
-	    default:
-		// handle remaining 4xy & 5xy codes
-		if (retCode >= 400 && retCode <= 499) {
-		    // assume address is valid, although we don't really know
-		    validUnsent.add(ia);
-		} else if (retCode >= 500 && retCode <= 599) {
-		    // assume address is invalid, although we don't really know
-		    invalid.add(ia);
-		} else {
-		    // completely unexpected response, just give up
-		    if (logger.isLoggable(Level.FINE))
-			logger.fine("got response code " + retCode +
-			    ", with response: " + lastServerResponse);
-		    String _lsr = lastServerResponse; // else rset will nuke it
-		    int _lrc = lastReturnCode;
-		    if (serverSocket != null)	// hasn't already been closed
-			issueCommand("RSET", -1);
-		    lastServerResponse = _lsr;	// restore, for get
-		    lastReturnCode = _lrc;
-		    throw new SMTPAddressFailedException(ia, cmd, retCode,
-								_lsr);
-		}
-		if (!sendPartial)
-		    sendFailed = true;
-		// create and chain the exception
-		sfex = new SMTPAddressFailedException(ia, cmd, retCode,
-							lastServerResponse);
-		if (mex == null)
-		    mex = sfex;
-		else
-		    mex.setNextException(sfex);
-		break;
-	    }
+                default:
+                    // handle remaining 4xy & 5xy codes
+                    if (retCode >= 400 && retCode <= 499) {
+                        // assume address is valid, although we don't really know
+                        validUnsent.add(ia);
+                    } else if (retCode >= 500 && retCode <= 599) {
+                        // assume address is invalid, although we don't really know
+                        invalid.add(ia);
+                    } else {
+                        // completely unexpected response, just give up
+                        if (logger.isLoggable(Level.FINE))
+                            logger.fine("got response code " + retCode +
+                                ", with response: " + lastServerResponse);
+                        String _lsr = lastServerResponse; // else rset will nuke it
+                        int _lrc = lastReturnCode;
+                        if (serverSocket != null)	// hasn't already been closed
+                            issueCommand("RSET", -1);
+                        lastServerResponse = _lsr;	// restore, for get
+                        lastReturnCode = _lrc;
+                        throw new SMTPAddressFailedException(ia, cmd, retCode,
+                                                                    _lsr);
+                    }
+                    if (!sendPartial)
+                        sendFailed = true;
+                    // create and chain the exception
+                    sfex = new SMTPAddressFailedException(ia, cmd, retCode,
+                                                            lastServerResponse);
+                    if (mex == null)
+                        mex = sfex;
+                    else
+                        mex.setNextException(sfex);
+                    break;
+                }
+            }
 	}
 
 	// if we're willing to send to a partial list, and we found no
@@ -2140,6 +2154,11 @@ public class SMTPTransport extends Transport {
 	    throw new MessagingException("Could not convert socket to TLS",
 								ioex);
 	}
+    }
+    
+    protected void xackOff() throws MessagingException {
+	issueCommand("XACK OFF", 250);
+	
     }
 
     /////// primitives ///////
@@ -2415,7 +2434,7 @@ public class SMTPTransport extends Transport {
      * @since JavaMail 1.4.1
      */
     protected void sendCommand(String cmd) throws MessagingException {
-        LOG.log(Level.SEVERE, "SMTPTransport Cmd: " + cmd);
+       // LOG.log(Level.SEVERE, "SMTPTransport Cmd: " + cmd);
 	sendCommand(toBytes(cmd));
     }
 

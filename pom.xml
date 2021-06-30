@@ -30,7 +30,7 @@
     <groupId>com.sun.mail</groupId>
     <artifactId>all</artifactId>
     <packaging>pom</packaging>
-    <version>1.6.7</version>
+    <version>1.6.7.1</version>
     <name>Jakarta Mail API distribution</name>
     <description>${project.name}</description>
     <url>http://eclipse-ee4j.github.io/mail</url>
@@ -757,7 +757,7 @@ Use is subject to <a href="{@docRoot}/doc-files/speclicense.html" target="_top">
                 <groupId>junit</groupId>
                 <artifactId>junit</artifactId>
                 <version>4.13.1</version>
-            </dependency>
+            </dependency>            
 	</dependencies>
     </dependencyManagement>
 
